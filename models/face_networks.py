@@ -154,56 +154,64 @@ class ResnetGenerator(nn.Module):
         model1 = [nn.ReflectionPad2d(3),
                  nn.Conv2d(input_nc, ngf, kernel_size=7, padding=0,
                            bias=use_bias),
-                 norm_layer(ngf),
-                 nn.ReLU(True)]
+                 norm_layer(ngf)]
 
         model2 = [nn.ReflectionPad2d(3),
                  nn.Conv2d(input_nc, ngf, kernel_size=7, padding=0,
                            bias=use_bias),
-                 norm_layer(ngf),
-                 nn.ReLU(True)]
+                 norm_layer(ngf)]
 
-        # n_downsampling = 2
-        n_downsampling = 2
+        n_downsampling = 3
+
         for i in range(n_downsampling):
             mult = 2**i
-            model1 += [nn.Conv2d(ngf * mult, ngf * mult * 2, kernel_size=3,
+            model1 += [nn.ReLU(True),
+                       nn.Conv2d(ngf * mult, ngf * mult * 2, kernel_size=3, stride=2, padding=1, bias=use_bias),
+                       norm_layer(ngf * mult * 2)]
+            model2 += [nn.ReLU(True),
+                       nn.Conv2d(ngf * mult, ngf * mult * 2, kernel_size=3, stride=2, padding=1, bias=use_bias),
+                       norm_layer(ngf * mult * 2)]
+            model1 += [ResnetBlock(ngf * mult * 2, padding_type=padding_type, norm_layer=norm_layer, use_dropout=use_dropout, use_bias=use_bias)]
+            model2 += [ResnetBlock(ngf * mult * 2, padding_type=padding_type, norm_layer=norm_layer, use_dropout=use_dropout, use_bias=use_bias)]
+
+        for i in range(n_downsampling):
+            # mult = 2**i
+            model1 += [nn.Conv2d(ngf * mult * 2, ngf * mult * 2, kernel_size=3,
                                 stride=2, padding=1, bias=use_bias),
                       norm_layer(ngf * mult * 2),
                       nn.ReLU(True)]
-            model2 += [nn.Conv2d(ngf * mult, ngf * mult * 2, kernel_size=3,
+            model2 += [nn.Conv2d(ngf * mult * 2, ngf * mult * 2, kernel_size=3,
                                  stride=2, padding=1, bias=use_bias),
                        norm_layer(ngf * mult * 2),
                        nn.ReLU(True)]
-        for i in range(5):
-            model1 += [ResnetBlock(ngf * mult * 2, padding_type=padding_type, norm_layer=norm_layer, use_dropout=use_dropout,
-                                  use_bias=use_bias)]
-            model2 += [ResnetBlock(ngf * mult * 2, padding_type=padding_type, norm_layer=norm_layer, use_dropout=use_dropout,
-                                  use_bias=use_bias)]
-
-        fc1 = [
-            nn.Linear(ngf * mult * 2 * 256, 1024),
-        ]
-
-        fc2 = [
-            nn.ReLU(True),
-            nn.Linear(1024, class_n),
-        ]
         #
-        model = []
-        mult = 2**(n_downsampling + 1)
-        for i in range(5):
-            model += [ResnetBlock(ngf * mult, padding_type=padding_type, norm_layer=norm_layer, use_dropout=use_dropout, use_bias=use_bias)]
-
-        model += [nn.Conv2d(ngf * mult, int(ngf * mult / 2),
+        fc1 = [
+            nn.Linear(ngf * mult * 2 * 1, class_n),
+        ]
+        # fc2 = [
+        #     nn.ReLU(True),
+        #     nn.Linear(1024, class_n),
+        # ]
+        #
+        model = [nn.Conv2d(ngf * mult * 2 * 2, ngf * mult * 2,
                                      kernel_size=3, stride=1,
                                      padding=1,
                                      bias=use_bias),
-                  norm_layer(int(ngf * mult / 2)),
+                  norm_layer(int(ngf * mult * 2)),
                   nn.ReLU(True)]
 
         for i in range(n_downsampling):
+            model += [nn.ConvTranspose2d(ngf * mult * 2, ngf * mult * 2,
+                                         kernel_size=3, stride=2,
+                                         padding=1, output_padding=1,
+                                         bias=use_bias),
+                      norm_layer(ngf * mult * 2),
+                      nn.ReLU(True)]
+
+        for i in range(n_downsampling):
             mult = 2**(n_downsampling - i)
+            model += [ResnetBlock(ngf * mult, padding_type=padding_type, norm_layer=norm_layer, use_dropout=use_dropout,
+                            use_bias=use_bias)]
             model += [nn.ConvTranspose2d(ngf * mult, int(ngf * mult / 2),
                                          kernel_size=3, stride=2,
                                          padding=1, output_padding=1,
@@ -215,7 +223,7 @@ class ResnetGenerator(nn.Module):
         model += [nn.Tanh()]
 
         self.fc1 = nn.Sequential(*fc1)
-        self.fc2 = nn.Sequential(*fc2)
+        # self.fc2 = nn.Sequential(*fc2)
         self.model1 = nn.Sequential(*model1)
         self.model2 = nn.Sequential(*model2)
         self.model = nn.Sequential(*model)
@@ -225,15 +233,15 @@ class ResnetGenerator(nn.Module):
         input2 = self.model2(input2)
 
         identity = self.fc1(input1.view(input1.size(0), -1))
-        label = self.fc2(identity)
+        # label = self.fc2(identity)
 
-        return identity, label, self.model(torch.cat([input1, input2], 1))
+        return input1, identity, self.model(torch.cat([input1, input2], 1))
 
     def set_requires_grad(self, iden_grad=True, attr_grad=True, gen_grad=True):
         for param in self.fc1.parameters():
             param.requires_grad = iden_grad
-        for param in self.fc2.parameters():
-            param.requires_grad = iden_grad
+        # for param in self.fc2.parameters():
+        #     param.requires_grad = iden_grad
         for param in self.model1.parameters():
             param.requires_grad = iden_grad
         for param in self.model2.parameters():

@@ -32,6 +32,11 @@ class CycleFaceGANModel(BaseModel):
     def initialize(self, opt):
         BaseModel.initialize(self, opt)
 
+        self.total = 0
+        self.correct = 0
+        self.count = 0
+        self.loss_precision = 0
+
         self.loss_D_A = 0
         self.loss_G_A = 0
         self.loss_cycle_A = 0
@@ -43,7 +48,10 @@ class CycleFaceGANModel(BaseModel):
         self.loss_classify = 0
         self.loss_identity = 0
         # specify the training losses you want to print out. The program will call base_model.get_current_losses
-        self.loss_names = ['D_A', 'G_A', 'cycle_A', 'idt_A', 'D_B', 'G_B', 'cycle_B', 'idt_B', 'classify', 'identity']
+        if not self.opt.classify:
+            self.loss_names = ['D_A', 'G_A', 'cycle_A', 'idt_A', 'D_B', 'G_B', 'cycle_B', 'idt_B', 'classify', 'identity']
+        else:
+            self.loss_names = ['precision', 'classify']
         # specify the images you want to save/display. The program will call base_model.get_current_visuals
         if not self.opt.classify:
             visual_names_A = ['real_AA', 'fake_BA', 'rec_AA']
@@ -87,10 +95,10 @@ class CycleFaceGANModel(BaseModel):
             self.fake_B_pool = ImagePool(opt.pool_size)
             # define loss functions
             self.criterionGAN = face_networks.GANLoss(use_lsgan=not opt.no_lsgan).to(self.device)
-            self.criterionCycle = torch.nn.L1Loss()
-            self.criterionIdt = torch.nn.L1Loss()
-            self.criterionClassify = torch.nn.CrossEntropyLoss()
-            self.criterionIndentity = torch.nn.L1Loss()
+            self.criterionCycle = torch.nn.L1Loss().to(self.device)
+            self.criterionIdt = torch.nn.L1Loss().to(self.device)
+            self.criterionClassify = torch.nn.CrossEntropyLoss().to(self.device)
+            self.criterionIndentity = torch.nn.L1Loss().to(self.device)
             # initialize optimizers
             self.optimizer_G = torch.optim.Adam(itertools.chain(self.netG.parameters()),
                                                 lr=opt.lr, betas=(opt.beta1, 0.999))
@@ -105,7 +113,6 @@ class CycleFaceGANModel(BaseModel):
         self.real_BB = input['B'].squeeze(0).to(self.device)
         self.label_A = input['A_label'].squeeze(0).to(self.device)
         self.label_B = input['B_label'].squeeze(0).to(self.device)
-
 
         # print(self.label_A)
         # print(self.label_B)
@@ -197,12 +204,24 @@ class CycleFaceGANModel(BaseModel):
             self.loss_classify.backward()
             self.optimizer_G.step()
         else:
-            self.netG.module.set_requires_grad(iden_grad=True, attr_grad=False, gen_grad=False)
+            self.netG.module.set_requires_grad(iden_grad=True, attr_grad=True, gen_grad=True)
             self.optimizer_G.zero_grad()
             self.loss_classify = self.criterionClassify(self.label_AA, self.label_A) \
                                  + self.criterionClassify(self.label_BB, self.label_B)
+            # test
+            self.count = (self.count + 1) % 1000
+            _, predicted = torch.max(self.label_AA, 1)
+            self.total += self.label_A.size(0)
+            self.correct += (predicted == self.label_A).sum().item()
+            if self.count == 0:
+                self.loss_precision = self.correct / self.total * 100.0
+                self.total = 0
+                self.correct = 0
+
+
             self.loss_G = self.loss_classify
             self.loss_G.backward()
+
             self.optimizer_G.step()
 
     def optimize_parameters(self):

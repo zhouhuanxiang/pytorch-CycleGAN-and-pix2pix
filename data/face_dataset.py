@@ -42,6 +42,8 @@ class FaceDataset(BaseDataset):
         for i in range(0, self.A_size):
             self.img_paths.append(make_dataset(self.A_paths[i]))
 
+        print('############\ntotal %d folders\n############\n' % self.A_size)
+
     def __getitem__(self, index_A):
         index_A = index_A % self.A_size
         if index_A % 2 == 0 and not self.opt.classify:
