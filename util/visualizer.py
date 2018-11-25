@@ -50,6 +50,7 @@ class Visualizer():
         if self.display_id > 0:
             import visdom
             self.ncols = opt.display_ncols
+            self.nrows = opt.display_nrows
             self.vis = visdom.Visdom(server=opt.display_server, port=opt.display_port, env=opt.display_env, raise_exceptions=True)
 
         if self.use_html:
@@ -86,13 +87,15 @@ class Visualizer():
                 images = []
                 idx = 0
                 for label, image in visuals.items():
-                    image_numpy = util.tensor2im(image)
                     label_html_row += '<td>%s</td>' % label
-                    images.append(image_numpy.transpose([2, 0, 1]))
                     idx += 1
                     if idx % ncols == 0:
                         label_html += '<tr>%s</tr>' % label_html_row
                         label_html_row = ''
+                for i in range(self.nrows):
+                    for label, image in visuals.items():
+                        image_numpy = util.tensor2im(image[i:(i+1)])
+                        images.append(image_numpy.transpose([2, 0, 1]))
                 white_image = np.ones_like(image_numpy.transpose([2, 0, 1])) * 255
                 while idx % ncols != 0:
                     images.append(white_image)

@@ -18,6 +18,9 @@ class CycleFaceGANModel(BaseModel):
         parser.set_defaults(lr=0.0001)
         parser.set_defaults(dataroot='/home2/zhx/data/CASIA-WebFace')
         parser.set_defaults(norm='batch')
+        parser.set_defaults(save_epoch_freq=3)
+        parser.set_defaults(display_ncols=8)
+
         if is_train:
             parser.add_argument('--lambda_A', type=float, default=10.0, help='weight for cycle loss (A -> B -> A)')
             parser.add_argument('--lambda_B', type=float, default=10.0,
@@ -26,6 +29,7 @@ class CycleFaceGANModel(BaseModel):
             parser.add_argument('--class_n', type=int, default=10575, help='to do')
             parser.add_argument('--classify', action='store_true', help='to do')
             parser.add_argument('--validate_freq', type=int, default=10000, help='to do')
+            parser.add_argument('--display_nrows', type=int, default=6, help='to do')
 
         return parser
 
@@ -157,6 +161,10 @@ class CycleFaceGANModel(BaseModel):
         lambda_B = self.opt.lambda_B
 
         if not self.opt.classify:
+            # combined loss, two pathway step
+            self.optimizer_G.zero_grad()
+            # first, backward loss_others
+            self.netG.module.set_requires_grad(iden_grad=False)
             # Identity loss
             if lambda_idt > 0:
                 # G_A should be identity if real_B is fed.
@@ -174,9 +182,10 @@ class CycleFaceGANModel(BaseModel):
                                  + self.criterionClassify(self.label_AB, self.label_B)
             # self.loss_classify = self.criterionClassify(self.label_AA, self.label_A) \
             #                      + self.criterionClassify(self.label_AB, self.label_B)
-            self.loss_identity = self.criterionIndentity(self.identity_BA, self.identity_AA) \
-                                 + self.criterionIndentity(self.identity_AB, self.identity_BB)
-            # self.loss_identity = 0
+            self.loss_identity = self.criterionIndentity(self.identity_BA, self.identity_AA.detach()) \
+                                 + self.criterionIndentity(self.identity_AB, self.identity_BB.detach())
+            # self.loss_identity = torch.mean(torch.abs(self.identity_BA - self.identity_AA)) \
+            #                      + torch.mean(torch.abs(self.identity_AB - self.identity_BB))
 
             # GAN loss D_A(G_A(A))
             self.loss_G_A = self.criterionGAN(self.netD(self.fake_BA), True)
@@ -186,10 +195,6 @@ class CycleFaceGANModel(BaseModel):
             self.loss_cycle_A = self.criterionCycle(self.rec_AA, self.real_AA) * lambda_A
             # Backward cycle loss
             self.loss_cycle_B = self.criterionCycle(self.rec_BB, self.real_BB) * lambda_B
-            # combined loss, two pathway step
-            self.optimizer_G.zero_grad()
-            # first, backward loss_others
-            self.netG.module.set_requires_grad(iden_grad=False)
             self.loss_G = self.loss_G_A + self.loss_G_B \
                           + self.loss_cycle_A + self.loss_cycle_B \
                           + self.loss_idt_A + self.loss_idt_B \
@@ -202,6 +207,7 @@ class CycleFaceGANModel(BaseModel):
             self.loss_classify = self.criterionClassify(self.label_AA, self.label_A) \
                                  + self.criterionClassify(self.label_BB, self.label_B)
             self.loss_classify.backward()
+            # last, step grad
             self.optimizer_G.step()
         else:
             self.netG.module.set_requires_grad(iden_grad=True, attr_grad=True, gen_grad=True)

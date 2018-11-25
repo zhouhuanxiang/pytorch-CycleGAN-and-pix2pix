@@ -166,39 +166,35 @@ class ResnetGenerator(nn.Module):
         for i in range(n_downsampling):
             mult = 2**i
             model1 += [nn.ReLU(True),
-                       nn.Conv2d(ngf * mult, ngf * mult * 2, kernel_size=3, stride=2, padding=1, bias=use_bias),
+                       ResnetBlock(ngf * mult, padding_type=padding_type, norm_layer=norm_layer,
+                                   use_dropout=use_dropout, use_bias=use_bias),
+                       nn.Conv2d(ngf * mult, ngf * mult * 2, kernel_size=3,
+                                 stride=2, padding=1, bias=use_bias),
                        norm_layer(ngf * mult * 2)]
             model2 += [nn.ReLU(True),
-                       nn.Conv2d(ngf * mult, ngf * mult * 2, kernel_size=3, stride=2, padding=1, bias=use_bias),
+                       ResnetBlock(ngf * mult, padding_type=padding_type, norm_layer=norm_layer,
+                                   use_dropout=use_dropout, use_bias=use_bias),
+                       nn.Conv2d(ngf * mult, ngf * mult * 2, kernel_size=3,
+                                 stride=2, padding=1, bias=use_bias),
                        norm_layer(ngf * mult * 2)]
-            model1 += [ResnetBlock(ngf * mult * 2, padding_type=padding_type, norm_layer=norm_layer, use_dropout=use_dropout, use_bias=use_bias)]
-            model2 += [ResnetBlock(ngf * mult * 2, padding_type=padding_type, norm_layer=norm_layer, use_dropout=use_dropout, use_bias=use_bias)]
 
         for i in range(n_downsampling):
             # mult = 2**i
-            model1 += [nn.Conv2d(ngf * mult * 2, ngf * mult * 2, kernel_size=3,
-                                stride=2, padding=1, bias=use_bias),
-                      norm_layer(ngf * mult * 2),
-                      nn.ReLU(True)]
-            model2 += [nn.Conv2d(ngf * mult * 2, ngf * mult * 2, kernel_size=3,
+            model1 += [nn.ReLU(True),
+                       nn.Conv2d(ngf * mult * 2, ngf * mult * 2, kernel_size=3,
                                  stride=2, padding=1, bias=use_bias),
-                       norm_layer(ngf * mult * 2),
-                       nn.ReLU(True)]
+                       norm_layer(ngf * mult * 2)]
+            model2 += [nn.ReLU(True),
+                       nn.Conv2d(ngf * mult * 2, ngf * mult * 2, kernel_size=3,
+                                 stride=2, padding=1, bias=use_bias),
+                       norm_layer(ngf * mult * 2)]
         #
-        fc1 = [
-            nn.Linear(ngf * mult * 2 * 1, class_n),
-        ]
-        # fc2 = [
-        #     nn.ReLU(True),
-        #     nn.Linear(1024, class_n),
-        # ]
+        fc1 = [nn.Linear(ngf * mult * 2 * 1, class_n)]
         #
         model = [nn.Conv2d(ngf * mult * 2 * 2, ngf * mult * 2,
-                                     kernel_size=3, stride=1,
-                                     padding=1,
-                                     bias=use_bias),
-                  norm_layer(int(ngf * mult * 2)),
-                  nn.ReLU(True)]
+                           kernel_size=3, stride=1, padding=1, bias=use_bias),
+                 norm_layer(int(ngf * mult * 2)),
+                 nn.ReLU(True)]
 
         for i in range(n_downsampling):
             model += [nn.ConvTranspose2d(ngf * mult * 2, ngf * mult * 2,
