@@ -28,8 +28,12 @@ class CycleFaceGANModel(BaseModel):
             parser.add_argument('--lambda_identity', type=float, default=0.5, help='use identity mapping. Setting lambda_identity other than 0 has an effect of scaling the weight of the identity mapping loss. For example, if the weight of the identity loss should be 10 times smaller than the weight of the reconstruction loss, please set lambda_identity = 0.1')
             parser.add_argument('--class_n', type=int, default=10575, help='to do')
             parser.add_argument('--classify', action='store_true', help='to do')
+            parser.add_argument('--without_classify', action='store_true', help='to do')
+            parser.add_argument('--without_cycle', action='store_true', help='to do')
+            parser.add_argument('--with_expression', action='store_true', help='to do')
             parser.add_argument('--validate_freq', type=int, default=10000, help='to do')
             parser.add_argument('--display_nrows', type=int, default=6, help='to do')
+            parser.add_argument('--same_person', action='store_true', help='to do')
 
         return parser
 
@@ -51,9 +55,11 @@ class CycleFaceGANModel(BaseModel):
         self.loss_idt_B = 0
         self.loss_classify = 0
         self.loss_identity = 0
+        self.loss_exp_A = 0
+        self.loss_exp_B = 0
         # specify the training losses you want to print out. The program will call base_model.get_current_losses
         if not self.opt.classify:
-            self.loss_names = ['D_A', 'G_A', 'cycle_A', 'idt_A', 'D_B', 'G_B', 'cycle_B', 'idt_B', 'classify', 'identity']
+            self.loss_names = ['exp_A', 'exp_B', 'D_A', 'G_A', 'cycle_A', 'idt_A', 'D_B', 'G_B', 'cycle_B', 'idt_B', 'classify', 'identity']
         else:
             self.loss_names = ['precision', 'classify']
         # specify the images you want to save/display. The program will call base_model.get_current_visuals
@@ -100,6 +106,7 @@ class CycleFaceGANModel(BaseModel):
             # define loss functions
             self.criterionGAN = face_networks.GANLoss(use_lsgan=not opt.no_lsgan).to(self.device)
             self.criterionCycle = torch.nn.L1Loss().to(self.device)
+            self.criterionExp = torch.nn.L1Loss(reduce=False).to(self.device)
             self.criterionIdt = torch.nn.L1Loss().to(self.device)
             self.criterionClassify = torch.nn.CrossEntropyLoss().to(self.device)
             self.criterionIndentity = torch.nn.L1Loss().to(self.device)
@@ -191,22 +198,31 @@ class CycleFaceGANModel(BaseModel):
             self.loss_G_A = self.criterionGAN(self.netD(self.fake_BA), True)
             # GAN loss D_B(G_B(B))
             self.loss_G_B = self.criterionGAN(self.netD(self.fake_AB), True)
-            # Forward cycle loss
-            self.loss_cycle_A = self.criterionCycle(self.rec_AA, self.real_AA) * lambda_A
-            # Backward cycle loss
-            self.loss_cycle_B = self.criterionCycle(self.rec_BB, self.real_BB) * lambda_B
+            if not self.opt.without_cycle:
+                # Forward cycle loss
+                self.loss_cycle_A = self.criterionCycle(self.rec_AA, self.real_AA) * lambda_A
+                # Backward cycle loss
+                self.loss_cycle_B = self.criterionCycle(self.rec_BB, self.real_BB) * lambda_B
+            if self.opt.with_expression:
+                # expression constraint if A B of the same person
+                label_same = (self.label_A == self.label_B).type(torch.cuda.FloatTensor)
+                if label_same.sum() > 0:
+                    self.loss_exp_A = self.criterionExp(self.fake_AB, self.real_AA.detach()).mean(1).mean(1).mean(1).dot(label_same) / label_same.sum()
+                    self.loss_exp_B = self.criterionExp(self.fake_BA, self.real_BB.detach()).mean(1).mean(1).mean(1).dot(label_same) / label_same.sum()
             self.loss_G = self.loss_G_A + self.loss_G_B \
                           + self.loss_cycle_A + self.loss_cycle_B \
+                          + self.loss_exp_A + self.loss_exp_B \
                           + self.loss_idt_A + self.loss_idt_B \
                           + self.loss_classify + self.loss_identity
             self.loss_G.backward()
             # second, backward loss_classify
-            self.netG.module.set_requires_grad(iden_grad=True)
-            _, self.label_AA, _ = self.netG(self.real_AA, self.real_BB)
-            _, self.label_BB, _ = self.netG(self.real_BB, self.real_AA)
-            self.loss_classify = self.criterionClassify(self.label_AA, self.label_A) \
-                                 + self.criterionClassify(self.label_BB, self.label_B)
-            self.loss_classify.backward()
+            if not self.opt.without_classify:
+                self.netG.module.set_requires_grad(iden_grad=True)
+                _, self.label_AA, _ = self.netG(self.real_AA, self.real_BB)
+                _, self.label_BB, _ = self.netG(self.real_BB, self.real_AA)
+                self.loss_classify = self.criterionClassify(self.label_AA, self.label_A) \
+                                     + self.criterionClassify(self.label_BB, self.label_B)
+                self.loss_classify.backward()
             # last, step grad
             self.optimizer_G.step()
         else:
