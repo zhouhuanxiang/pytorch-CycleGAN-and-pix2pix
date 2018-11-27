@@ -30,21 +30,16 @@ class CycleFaceGANModel(BaseModel):
             parser.add_argument('--classify', action='store_true', help='to do')
             parser.add_argument('--without_classify', action='store_true', help='to do')
             parser.add_argument('--without_cycle', action='store_true', help='to do')
+            parser.add_argument('--with_identity', action='store_true', help='to do')
             parser.add_argument('--with_expression', action='store_true', help='to do')
             parser.add_argument('--validate_freq', type=int, default=10000, help='to do')
             parser.add_argument('--display_nrows', type=int, default=6, help='to do')
+            parser.add_argument('--same_person_ratio', type=int, default=3, help='to do')
             parser.add_argument('--same_person', action='store_true', help='to do')
 
         return parser
 
-    def initialize(self, opt):
-        BaseModel.initialize(self, opt)
-
-        self.total = 0
-        self.correct = 0
-        self.count = 0
-        self.loss_precision = 0
-
+    def init_loss(self):
         self.loss_D_A = 0
         self.loss_G_A = 0
         self.loss_cycle_A = 0
@@ -57,6 +52,16 @@ class CycleFaceGANModel(BaseModel):
         self.loss_identity = 0
         self.loss_exp_A = 0
         self.loss_exp_B = 0
+
+    def initialize(self, opt):
+        BaseModel.initialize(self, opt)
+
+        self.total = 0
+        self.correct = 0
+        self.count = 0
+        self.loss_precision = 0
+
+        self.init_loss()
         # specify the training losses you want to print out. The program will call base_model.get_current_losses
         if not self.opt.classify:
             self.loss_names = ['exp_A', 'exp_B', 'D_A', 'G_A', 'cycle_A', 'idt_A', 'D_B', 'G_B', 'cycle_B', 'idt_B', 'classify', 'identity']
@@ -106,6 +111,7 @@ class CycleFaceGANModel(BaseModel):
             # define loss functions
             self.criterionGAN = face_networks.GANLoss(use_lsgan=not opt.no_lsgan).to(self.device)
             self.criterionCycle = torch.nn.L1Loss().to(self.device)
+            self.criterionAsym = torch.nn.L1Loss(reduce=False).to(self.device)
             self.criterionExp = torch.nn.L1Loss(reduce=False).to(self.device)
             self.criterionIdt = torch.nn.L1Loss().to(self.device)
             self.criterionClassify = torch.nn.CrossEntropyLoss().to(self.device)
@@ -125,13 +131,6 @@ class CycleFaceGANModel(BaseModel):
         self.label_A = input['A_label'].squeeze(0).to(self.device)
         self.label_B = input['B_label'].squeeze(0).to(self.device)
 
-        # print(self.label_A)
-        # print(self.label_B)
-        # print(self.real_AA.size())
-        # print(self.real_BB.size())
-        # print(self.label_A.size())
-        # print(self.label_B.size())
-
     def forward(self):
         self.identity_AA, self.label_AA, self.fake_BA = self.netG(self.real_AA, self.real_BB)
         if not self.opt.classify:
@@ -143,10 +142,10 @@ class CycleFaceGANModel(BaseModel):
 
     def backward_D_basic(self, netD, real, fake):
         # Real
-        pred_real = netD(real)
+        _, pred_real = netD(real)
         loss_D_real = self.criterionGAN(pred_real, True)
         # Fake
-        pred_fake = netD(fake.detach())
+        _, pred_fake = netD(fake.detach())
         loss_D_fake = self.criterionGAN(pred_fake, False)
         # Combined loss
         loss_D = (loss_D_real + loss_D_fake) * 0.5
@@ -156,16 +155,18 @@ class CycleFaceGANModel(BaseModel):
 
     def backward_D_A(self):
         fake_BA = self.fake_B_pool.query(self.fake_BA)
-        self.loss_D_A = self.backward_D_basic(self.netD, self.real_BB, fake_BA)
+        self.loss_D_A = self.backward_D_basic(self.netD, self.real_AA, fake_BA)
 
     def backward_D_B(self):
         fake_AB = self.fake_A_pool.query(self.fake_AB)
-        self.loss_D_B = self.backward_D_basic(self.netD, self.real_AA, fake_AB)
+        self.loss_D_B = self.backward_D_basic(self.netD, self.real_BB, fake_AB)
 
     def backward_G(self):
         lambda_idt = self.opt.lambda_identity
         lambda_A = self.opt.lambda_A
         lambda_B = self.opt.lambda_B
+
+        self.init_loss()
 
         if not self.opt.classify:
             # combined loss, two pathway step
@@ -185,19 +186,26 @@ class CycleFaceGANModel(BaseModel):
                 self.loss_idt_B = 0
 
             # identity preserving
-            self.loss_classify = self.criterionClassify(self.label_BA, self.label_A) \
-                                 + self.criterionClassify(self.label_AB, self.label_B)
-            # self.loss_classify = self.criterionClassify(self.label_AA, self.label_A) \
-            #                      + self.criterionClassify(self.label_AB, self.label_B)
-            self.loss_identity = self.criterionIndentity(self.identity_BA, self.identity_AA.detach()) \
-                                 + self.criterionIndentity(self.identity_AB, self.identity_BB.detach())
-            # self.loss_identity = torch.mean(torch.abs(self.identity_BA - self.identity_AA)) \
-            #                      + torch.mean(torch.abs(self.identity_AB - self.identity_BB))
+            if self.opt.with_identity:
+                self.loss_classify = self.criterionClassify(self.label_BA, self.label_A) \
+                                     + self.criterionClassify(self.label_AB, self.label_B)
+                self.loss_identity = self.criterionIndentity(self.identity_BA, self.identity_AA.detach()) \
+                                     + self.criterionIndentity(self.identity_AB, self.identity_BB.detach())
 
+            label_same = (self.label_A == self.label_B).type(torch.cuda.FloatTensor)
+            d_ba_fake = self.netD(self.fake_BA)
+            d_ab_fake = self.netD(self.fake_AB)
+            d_aa_real = self.netD(self.real_AA)
+            d_bb_real = self.netD(self.real_BB)
             # GAN loss D_A(G_A(A))
-            self.loss_G_A = self.criterionGAN(self.netD(self.fake_BA), True)
+            self.loss_G_A = self.criterionGAN(d_ba_fake[1], True)
+            if label_same.sum() > 0:
+                self.loss_G_A += self.criterionAsym(d_ba_fake[0], d_bb_real[0]).mean(1).mean(1).mean(1).dot(label_same) / label_same.sum()
             # GAN loss D_B(G_B(B))
-            self.loss_G_B = self.criterionGAN(self.netD(self.fake_AB), True)
+            self.loss_G_B = self.criterionGAN(d_ab_fake[1], True)
+            if label_same.sum() > 0:
+                self.loss_G_B += self.criterionAsym(d_ab_fake[0], d_aa_real[0]).mean(1).mean(1).mean(1).dot(label_same) / label_same.sum()
+
             if not self.opt.without_cycle:
                 # Forward cycle loss
                 self.loss_cycle_A = self.criterionCycle(self.rec_AA, self.real_AA) * lambda_A
@@ -205,7 +213,6 @@ class CycleFaceGANModel(BaseModel):
                 self.loss_cycle_B = self.criterionCycle(self.rec_BB, self.real_BB) * lambda_B
             if self.opt.with_expression:
                 # expression constraint if A B of the same person
-                label_same = (self.label_A == self.label_B).type(torch.cuda.FloatTensor)
                 if label_same.sum() > 0:
                     self.loss_exp_A = self.criterionExp(self.fake_AB, self.real_AA.detach()).mean(1).mean(1).mean(1).dot(label_same) / label_same.sum()
                     self.loss_exp_B = self.criterionExp(self.fake_BA, self.real_BB.detach()).mean(1).mean(1).mean(1).dot(label_same) / label_same.sum()
@@ -255,6 +262,7 @@ class CycleFaceGANModel(BaseModel):
         # D_A and D_B
         if not self.opt.classify:
             self.set_requires_grad([self.netD], True)
+            self.netG.module.set_requires_grad(iden_grad=False)
             self.optimizer_D.zero_grad()
             self.backward_D_A()
             self.backward_D_B()

@@ -46,7 +46,7 @@ class FaceDataset(BaseDataset):
 
     def __getitem__(self, index_A):
         index_A = index_A % self.A_size
-        if (random.randint(0, 1) or self.opt.same_person) and not self.opt.classify:
+        if (random.randint(0, self.opt.same_person_ratio) or self.opt.same_person) and not self.opt.classify:
             A_path = np.random.choice(self.img_paths[index_A], 1, replace=True)[0]
             index_B = index_A
             B_path = np.random.choice(self.img_paths[index_B], 1, replace=True)[0]

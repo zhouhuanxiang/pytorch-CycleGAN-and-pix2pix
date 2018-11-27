@@ -402,19 +402,21 @@ class NLayerDiscriminator(nn.Module):
         sequence += [
             nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult,
                       kernel_size=kw, stride=1, padding=padw, bias=use_bias),
-            norm_layer(ndf * nf_mult),
-            nn.LeakyReLU(0.2, True)
+            norm_layer(ndf * nf_mult)
         ]
 
-        sequence += [nn.Conv2d(ndf * nf_mult, 1, kernel_size=kw, stride=1, padding=padw)]
+        fc = [nn.LeakyReLU(0.2, True),
+              nn.Conv2d(ndf * nf_mult, 1, kernel_size=kw, stride=1, padding=padw)]
 
         if use_sigmoid:
-            sequence += [nn.Sigmoid()]
+            fc += [nn.Sigmoid()]
 
-        self.model = nn.Sequential(*sequence)
+        self.model1 = nn.Sequential(*sequence)
+        self.model2 = nn.Sequential(*fc)
 
     def forward(self, input):
-        return self.model(input)
+        input1 = self.model1(input)
+        return input1, self.model2(input1)
 
 
 class PixelDiscriminator(nn.Module):
