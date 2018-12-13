@@ -48,43 +48,41 @@ class FaceDataset(BaseDataset):
         index_A = index_A % self.A_size
         if (random.randint(0, self.opt.same_person_ratio) or self.opt.same_person) and not self.opt.classify:
             A_path = np.random.choice(self.img_paths[index_A], 1, replace=True)[0]
+            # A1_path = np.random.choice(self.img_paths[index_A], 1, replace=True)[0]
+            # A2_path = np.random.choice(self.img_paths[index_A], 1, replace=True)[0]
             index_B = index_A
             B_path = np.random.choice(self.img_paths[index_B], 1, replace=True)[0]
+            # B1_path = np.random.choice(self.img_paths[index_B], 1, replace=True)[0]
+            # B2_path = np.random.choice(self.img_paths[index_B], 1, replace=True)[0]
         else:
             A_path = np.random.choice(self.img_paths[index_A], 1, replace=True)[0]
+            # A1_path = np.random.choice(self.img_paths[index_A], 1, replace=True)[0]
+            # A2_path = np.random.choice(self.img_paths[index_A], 1, replace=True)[0]
             index_B = random.randint(0, self.A_size - 1)
             B_path = np.random.choice(self.img_paths[index_B], 1, replace=True)[0]
+            # B1_path = np.random.choice(self.img_paths[index_B], 1, replace=True)[0]
+            # B2_path = np.random.choice(self.img_paths[index_B], 1, replace=True)[0]
 
         A_img = Image.open(A_path).convert('RGB')
+        # A1_img = Image.open(A1_path).convert('RGB')
+        # A2_img = Image.open(A2_path).convert('RGB')
         B_img = Image.open(B_path).convert('RGB')
+        # B1_img = Image.open(B1_path).convert('RGB')
+        # B2_img = Image.open(B2_path).convert('RGB')
 
         A = self.transform(A_img)
+        # A1 = self.transform(A1_img)
+        # A2 = self.transform(A2_img)
         B = self.transform(B_img)
-
-        # index_B = index_A
-        # if index_A % 2 == 1:
-        #     index_B = random.randint(0, self.A_size - 1)
-        #     if index_B == index_A:
-        #         index_B = (index_B + 1) % self.A_size
-        #
-        #
-        # A_img_paths = self.img_paths[index_A].copy()
-        # B_img_paths = self.img_paths[index_B].copy()
-        # A_img_paths = np.random.choice(A_img_paths, self.batch_size, replace=True)
-        # B_img_paths = np.random.choice(B_img_paths, self.batch_size, replace=True)
-        #
-        # A = torch.tensor([]);
-        # B = torch.tensor([]);
-        # A_label = torch.tensor([index_A] * self.batch_size)
-        # B_label = torch.tensor([index_B] * self.batch_size)
-        # for i in range(0, self.batch_size):
-        #     A_img = Image.open(A_img_paths[i]).convert('RGB')
-        #     B_img = Image.open(B_img_paths[i]).convert('RGB')
-        #     A = torch.cat([A, self.transform(A_img).unsqueeze(0)], 0)
-        #     B = torch.cat([B, self.transform(B_img).unsqueeze(0)], 0)
+        # B1 = self.transform(B1_img)
+        # B2 = self.transform(B2_img)
 
 
-        return {'A': A, 'B': B, 'A_label': index_A, 'B_label': index_B}
+        # return {'A': A, 'B': B, 'A_label': index_A, 'B_label': index_B,
+        #         'A1': A1, 'A2': A2,
+        #         'B1': B1, 'B2': B2}
+
+        return {'A': A, 'B': B, 'A_label': index_A, 'B_label': index_B  }
 
     def __len__(self):
         # return self.A_size

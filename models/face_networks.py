@@ -3,6 +3,7 @@ import torch.nn as nn
 from torch.nn import init
 import functools
 from torch.optim import lr_scheduler
+from torch.nn.utils import spectral_norm
 
 ###############################################################################
 # Helper Functions
@@ -71,6 +72,12 @@ def init_net(net, init_type='normal', init_gain=0.02, gpu_ids=[]):
     return net
 
 
+def define_I(class_n, input_nc, output_nc, ngf, netG, norm='batch', use_dropout=False, init_type='normal', init_gain=0.02, gpu_ids=[]):
+    net = None
+    norm_layer = get_norm_layer(norm_type=norm)
+    net = ResnetGeneratorI(class_n, input_nc, output_nc, ngf, norm_layer=norm_layer, use_dropout=use_dropout, n_blocks=9)
+    return init_net(net, init_type, init_gain, gpu_ids)
+
 def define_G(class_n, input_nc, output_nc, ngf, netG, norm='batch', use_dropout=False, init_type='normal', init_gain=0.02, gpu_ids=[]):
     net = None
     norm_layer = get_norm_layer(norm_type=norm)
@@ -89,12 +96,14 @@ def define_G(class_n, input_nc, output_nc, ngf, netG, norm='batch', use_dropout=
 
 
 def define_D(input_nc, ndf, netD,
-             n_layers_D=3, norm='batch', use_sigmoid=False, init_type='normal', init_gain=0.02, gpu_ids=[]):
+             n_layers_D=3, norm='batch', use_sigmoid=False, init_type='normal', init_gain=0.02, gpu_ids=[], use_l1=False):
     net = None
     norm_layer = get_norm_layer(norm_type=norm)
 
     if netD == 'basic':
         net = NLayerDiscriminator(input_nc, ndf, n_layers=3, norm_layer=norm_layer, use_sigmoid=use_sigmoid)
+    elif netD == 'spectral':
+        net = NLayerDiscriminatorSpectralNorm(input_nc, ndf, n_layers=3, norm_layer=norm_layer, use_sigmoid=use_sigmoid)
     elif netD == 'n_layers':
         net = NLayerDiscriminator(input_nc, ndf, n_layers_D, norm_layer=norm_layer, use_sigmoid=use_sigmoid)
     elif netD == 'pixel':
@@ -133,6 +142,54 @@ class GANLoss(nn.Module):
     def __call__(self, input, target_is_real):
         target_tensor = self.get_target_tensor(input, target_is_real)
         return self.loss(input, target_tensor)
+
+
+class ResnetGeneratorI(nn.Module):
+    def __init__(self, class_n, input_nc, output_nc, ngf=64, norm_layer=nn.BatchNorm2d, use_dropout=False, n_blocks=6, padding_type='reflect'):
+        assert(n_blocks >= 0)
+        super(ResnetGeneratorI, self).__init__()
+        self.input_nc = input_nc
+        self.output_nc = output_nc
+        self.ngf = ngf
+        if type(norm_layer) == functools.partial:
+            use_bias = norm_layer.func == nn.InstanceNorm2d
+        else:
+            use_bias = norm_layer == nn.InstanceNorm2d
+
+        model = [nn.ReflectionPad2d(3),
+                 nn.Conv2d(input_nc, ngf, kernel_size=7, padding=0,
+                           bias=use_bias),
+                 norm_layer(ngf)]
+
+        n_downsampling = 3
+
+        for i in range(n_downsampling):
+            mult = 2**i
+            model += [nn.ReLU(True),
+                       ResnetBlock(ngf * mult, padding_type=padding_type, norm_layer=norm_layer,
+                                   use_dropout=use_dropout, use_bias=use_bias),
+                       nn.Conv2d(ngf * mult, ngf * mult * 2, kernel_size=3,
+                                 stride=2, padding=1, bias=use_bias),
+                       norm_layer(ngf * mult * 2)]
+
+        for i in range(n_downsampling):
+            # mult = 2**i
+            model += [nn.ReLU(True),
+                       nn.Conv2d(ngf * mult * 2, ngf * mult * 2, kernel_size=3,
+                                 stride=2, padding=1, bias=use_bias),
+                       norm_layer(ngf * mult * 2)]
+        #
+        fc = [nn.Linear(ngf * mult * 2 * 1, class_n)]
+
+        self.model = nn.Sequential(*model)
+        self.fc = nn.Sequential(*fc)
+
+    def forward(self, input):
+        result1 = self.model(input)
+        result2 = self.fc(result1.view(result1.size(0), -1))
+
+        return result1, result2
+
 
 
 # Defines the generator that consists of Resnet blocks between a few
@@ -218,26 +275,26 @@ class ResnetGenerator(nn.Module):
         model += [nn.Conv2d(ngf, output_nc, kernel_size=7, padding=0)]
         model += [nn.Tanh()]
 
-        self.fc1 = nn.Sequential(*fc1)
-        # self.fc2 = nn.Sequential(*fc2)
         self.model1 = nn.Sequential(*model1)
         self.model2 = nn.Sequential(*model2)
+        self.fc1 = nn.Sequential(*fc1)
         self.model = nn.Sequential(*model)
 
-    def forward(self, input1, input2):
-        input1 = self.model1(input1)
-        input2 = self.model2(input2)
+    def forward(self, input1, input2, is_same=False):
+        result1 = self.model1(input1)
+        if not is_same:
+            result2 = self.model2(input2)
+        else:
+            result2 = result1
 
-        identity = self.fc1(input1.view(input1.size(0), -1))
+        identity = self.fc1(result1.view(input1.size(0), -1))
         # label = self.fc2(identity)
 
-        return input1, identity, self.model(torch.cat([input1, input2], 1))
+        return result1, identity, self.model(torch.cat([result1, result2], 1))
 
     def set_requires_grad(self, iden_grad=True, attr_grad=True, gen_grad=True):
         for param in self.fc1.parameters():
             param.requires_grad = iden_grad
-        # for param in self.fc2.parameters():
-        #     param.requires_grad = iden_grad
         for param in self.model1.parameters():
             param.requires_grad = iden_grad
         for param in self.model2.parameters():
@@ -369,6 +426,55 @@ class UnetSkipConnectionBlock(nn.Module):
             return torch.cat([x, self.model(x)], 1)
 
 
+class NLayerDiscriminatorSpectralNorm(nn.Module):
+    def __init__(self, input_nc, ndf=64, n_layers=3, norm_layer=nn.BatchNorm2d, use_sigmoid=False):
+        super(NLayerDiscriminatorSpectralNorm, self).__init__()
+        if type(norm_layer) == functools.partial:
+            use_bias = norm_layer.func == nn.InstanceNorm2d
+        else:
+            use_bias = norm_layer == nn.InstanceNorm2d
+
+        kw = 4
+        padw = 1
+        sequence = [
+            spectral_norm(nn.Conv2d(input_nc, ndf, kernel_size=kw, stride=2, padding=padw)),
+            nn.LeakyReLU(0.2, True)
+        ]
+
+        nf_mult = 1
+        nf_mult_prev = 1
+        for n in range(1, n_layers):
+            nf_mult_prev = nf_mult
+            nf_mult = min(2**n, 8)
+            sequence += [
+                spectral_norm(nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult,
+                          kernel_size=kw, stride=2, padding=padw, bias=use_bias)),
+                # norm_layer(ndf * nf_mult),
+                nn.LeakyReLU(0.2, True)
+            ]
+
+        nf_mult_prev = nf_mult
+        nf_mult = min(2**n_layers, 8)
+        sequence += [
+            spectral_norm(nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult,
+                      kernel_size=kw, stride=1, padding=padw, bias=use_bias)),
+            # norm_layer(ndf * nf_mult)
+        ]
+
+        fc = [nn.LeakyReLU(0.2, True),
+              spectral_norm(nn.Conv2d(ndf * nf_mult, 1, kernel_size=kw, stride=1, padding=padw))]
+
+        if use_sigmoid:
+            fc += [nn.Sigmoid()]
+
+        self.model1 = nn.Sequential(*sequence)
+        self.model2 = nn.Sequential(*fc)
+
+    def forward(self, input):
+        result1 = self.model1(input)
+        return result1, self.model2(result1)
+
+
 # Defines the PatchGAN discriminator with the specified arguments.
 class NLayerDiscriminator(nn.Module):
     def __init__(self, input_nc, ndf=64, n_layers=3, norm_layer=nn.BatchNorm2d, use_sigmoid=False):
@@ -415,8 +521,8 @@ class NLayerDiscriminator(nn.Module):
         self.model2 = nn.Sequential(*fc)
 
     def forward(self, input):
-        input1 = self.model1(input)
-        return input1, self.model2(input1)
+        result1 = self.model1(input)
+        return result1, self.model2(result1)
 
 
 class PixelDiscriminator(nn.Module):
